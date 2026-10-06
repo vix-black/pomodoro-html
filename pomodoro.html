@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pomodoro Timer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🍅%3C/text%3E%3C/svg%3E">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      padding: 30px 20px;
+      display: flex;
+      justify-content: center;
+      background: #111827;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .container { width: 100%; max-width: 540px; text-align: center; }
+    h1 { margin: 0 0 22px; }
+    .task-input {
+      width: 100%; padding: 14px; margin-bottom: 18px;
+      border: 2px solid transparent; border-radius: 10px;
+      background: #fff; color: #111827; font-size: 1rem;
+    }
+    .task-input:focus { outline: none; border-color: #10b981; }
+    .status { min-height: 24px; margin-bottom: 8px; color: #9ca3af; }
+    .timer { margin: 15px 0 25px; font-size: clamp(4rem, 15vw, 6rem); font-weight: 700; line-height: 1; }
+    button {
+      margin: 5px; padding: 12px 16px; border: 0; border-radius: 10px;
+      color: #fff; font-size: 1rem; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.12); }
+    button:active { transform: scale(.97); }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    .preset { background: #374151; }
+    .preset.selected { outline: 3px solid #60a5fa; }
+    .timer-buttons { display: flex; justify-content: center; gap: 6px; flex-wrap: nowrap; margin-bottom: 10px; }
+    .timer-buttons .preset { margin: 0; padding: 12px 10px; white-space: nowrap; flex: 1 1 0; }
+    .controls { margin-top: 15px; }
+    .start { background: #10b981; }
+    .pause { background: #f59e0b; }
+    .reset { background: #ef4444; }
+    .stats { margin-top: 24px; color: #9ca3af; }
+    .history-card { margin-top: 28px; padding: 20px; border-radius: 12px; background: #1f2937; text-align: left; }
+    .history-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .history-header h2 { margin: 0; font-size: 1.15rem; }
+    .clear-button { margin: 0; padding: 8px 10px; background: #4b5563; font-size: .85rem; }
+    .history-list { margin: 18px 0 0; padding: 0; list-style: none; }
+    .history-item { padding: 12px 0; border-bottom: 1px solid #374151; }
+    .history-item:last-child { border-bottom: 0; }
+    .history-task { display: block; margin-bottom: 4px; font-weight: 600; overflow-wrap: anywhere; }
+    .history-detail { color: #9ca3af; font-size: .85rem; }
+    .empty-history { margin: 18px 0 0; color: #9ca3af; }
+    .visually-hidden { position: absolute; left: -9999px; }
+    @media (max-width: 480px) { button { padding: 11px 12px; font-size: .9rem; } }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>&#x1F345; Pomodoro Timer</h1>
+
+    <label for="task" class="visually-hidden">What are you timing?</label>
+    <input id="task" class="task-input" type="text" maxlength="150"
+      placeholder="What are you timing?" autocomplete="off">
+
+    <div id="status" class="status" aria-live="polite">Select a timer</div>
+    <div id="timer" class="timer" role="timer" aria-live="off">05:00</div>
+
+    <div class="timer-buttons">
+      <button class="preset selected" data-minutes="5" onclick="setTimer(5, this)">☕ Reset</button>
+      <button class="preset" data-minutes="10" onclick="setTimer(10, this)">⚡ Momentum</button>
+      <button class="preset" data-minutes="15" onclick="setTimer(15, this)">🎯 Quick Win</button>
+      <button class="preset" data-minutes="30" onclick="setTimer(30, this)">🚀 Deep Focus</button>
+    </div>
+
+    <div class="controls">
+      <button id="startButton" class="start" onclick="startTimer()">Start</button>
+      <button class="pause" onclick="pauseTimer()">Pause</button>
+      <button class="reset" onclick="resetTimer()">Reset</button>
+    </div>
+
+    <div class="stats">Sessions completed: <strong id="sessions">0</strong></div>
+
+    <section class="history-card">
+      <div class="history-header">
+        <h2>Recent sessions</h2>
+        <button class="clear-button" onclick="clearHistory()">Clear history</button>
+      </div>
+      <ul id="history" class="history-list"></ul>
+      <p id="emptyHistory" class="empty-history">No completed sessions yet.</p>
+    </section>
+  </main>
+
+  <script>
+    let selectedMinutes = 5;
+    let timeLeft = selectedMinutes * 60;
+    let timerInterval = null;
+    let running = false;
+    let currentTask = "";
+    let audioContext = null;
+    let sessions = Number(localStorage.getItem("focusSessions")) || 0;
+
+    const timerElement = document.getElementById("timer");
+    const statusElement = document.getElementById("status");
+    const taskElement = document.getElementById("task");
+    const sessionsElement = document.getElementById("sessions");
+    sessionsElement.textContent = sessions;
+
+    function updateDisplay() {
+      const minutes = Math.floor(timeLeft / 60);
+      const seconds = timeLeft % 60;
+      const display = String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0");
+      timerElement.textContent = display;
+      document.title = running ? display + " · Pomodor Timer" : "Pomodor Timer";
+    }
+
+    function setTimer(minutes, selectedButton) {
+      pauseTimer(false);
+      selectedMinutes = minutes;
+      timeLeft = minutes * 60;
+      document.querySelectorAll(".preset").forEach(button => button.classList.remove("selected"));
+      if (selectedButton) selectedButton.classList.add("selected");
+      statusElement.textContent = minutes + " minute timer";
+      updateDisplay();
+    }
+
+    function getAudioContext() {
+      if (!audioContext) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContextClass();
+      }
+      if (audioContext.state === "suspended") audioContext.resume();
+      return audioContext;
+    }
+
+    function playTone(frequency, duration, delay = 0) {
+      window.setTimeout(() => {
+        const context = getAudioContext();
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const now = context.currentTime;
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(frequency, now);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + duration / 1000);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(now);
+        oscillator.stop(now + duration / 1000);
+      }, delay);
+    }
+
+    function playStartSound() {
+      playTone(520, 120);
+      playTone(700, 180, 130);
+    }
+
+    function playFinishSound() {
+      playTone(700, 180);
+      playTone(850, 180, 200);
+      playTone(1000, 350, 400);
+    }
+
+    function startTimer() {
+      if (running) return;
+      if (timeLeft <= 0) timeLeft = selectedMinutes * 60;
+      currentTask = taskElement.value.trim() || "Untitled session";
+      running = true;
+      playStartSound();
+      statusElement.textContent = "Timing: " + currentTask;
+      updateDisplay();
+      timerInterval = window.setInterval(() => {
+        timeLeft = Math.max(0, timeLeft - 1);
+        updateDisplay();
+        if (timeLeft === 0) finishSession();
+      }, 1000);
+    }
+
+    function pauseTimer(showStatus = true) {
+      window.clearInterval(timerInterval);
+      timerInterval = null;
+      const wasRunning = running;
+      running = false;
+      if (showStatus && wasRunning && timeLeft > 0) statusElement.textContent = "Paused";
+      updateDisplay();
+    }
+
+    function resetTimer() {
+      pauseTimer(false);
+      timeLeft = selectedMinutes * 60;
+      statusElement.textContent = selectedMinutes + " minute timer";
+      updateDisplay();
+    }
+
+    function finishSession() {
+      window.clearInterval(timerInterval);
+      timerInterval = null;
+      running = false;
+      timeLeft = 0;
+      playFinishSound();
+
+      sessions += 1;
+      localStorage.setItem("focusSessions", String(sessions));
+      sessionsElement.textContent = sessions;
+
+      const history = getHistory();
+      history.unshift({
+        task: currentTask,
+        duration: selectedMinutes,
+        completed: new Date().toLocaleString()
+      });
+      localStorage.setItem("focusHistory", JSON.stringify(history.slice(0, 50)));
+
+      statusElement.textContent = "Completed: " + currentTask;
+      taskElement.value = "";
+      updateDisplay();
+      loadHistory();
+
+      window.setTimeout(() => {
+        timeLeft = selectedMinutes * 60;
+        updateDisplay();
+      }, 1000);
+    }
+
+    function getHistory() {
+      try {
+        const stored = JSON.parse(localStorage.getItem("focusHistory"));
+        return Array.isArray(stored) ? stored : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function loadHistory() {
+      const history = getHistory();
+      const historyList = document.getElementById("history");
+      const emptyHistory = document.getElementById("emptyHistory");
+      historyList.innerHTML = "";
+
+      if (history.length === 0) {
+        emptyHistory.hidden = false;
+        return;
+      }
+
+      emptyHistory.hidden = true;
+      history.slice(0, 20).forEach(item => {
+        const listItem = document.createElement("li");
+        listItem.className = "history-item";
+
+        const task = document.createElement("span");
+        task.className = "history-task";
+        task.textContent = item.task;
+
+        const detail = document.createElement("span");
+        detail.className = "history-detail";
+        detail.textContent = item.duration + " minutes · " + item.completed;
+
+        listItem.appendChild(task);
+        listItem.appendChild(detail);
+        historyList.appendChild(listItem);
+      });
+    }
+
+    function clearHistory() {
+      if (!window.confirm("Clear all completed session history?")) return;
+      localStorage.removeItem("focusHistory");
+      localStorage.removeItem("focusSessions");
+      sessions = 0;
+      sessionsElement.textContent = "0";
+      loadHistory();
+    }
+
+    taskElement.addEventListener("keydown", event => {
+      if (event.key === "Enter") startTimer();
+    });
+
+    updateDisplay();
+    loadHistory();
+  </script>
+</body>
+</html>
